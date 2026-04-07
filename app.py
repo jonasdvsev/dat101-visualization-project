@@ -279,7 +279,7 @@ def build_horizontal_stacked_bar(map_gdf: gpd.GeoDataFrame, selected_regions: Li
     return fig
 
 
-def build_risk_heatmap(risk_df: pd.DataFrame, selected_regions: List[str] = None, highlighted_region: Optional[str] = None) -> go.Figure:
+def build_risk_heatmap(risk_df: pd.DataFrame, sort_order: str = "Selected Value/s", selected_regions: List[str] = None) -> go.Figure:
     """Generates the heatmap displaying frequency and impact of disasters by region"""
     heatmap_df = risk_df[[
         'PH Region',
@@ -289,15 +289,21 @@ def build_risk_heatmap(risk_df: pd.DataFrame, selected_regions: List[str] = None
         'Disaster Risk Score'
     ]].copy()
     heatmap_df.columns = ['Region', 'Frequency', 'Human Impact', 'Economic Impact', 'Disaster Risk Score']
-    heatmap_df = heatmap_df.set_index('Region').sort_values('Disaster Risk Score', ascending=True)
+    heatmap_df = heatmap_df.set_index('Region')
 
-    # Pin selected regions to the top; remaining rows keep their original (risk-score) order
-    if selected_regions:
+    # Sort by official order first, then split and reorder if needed
+    order_map = {name: i for i, name in enumerate(OFFICIAL_ORDER)}
+    heatmap_df['sort_idx'] = heatmap_df.index.map(order_map)
+    heatmap_df = heatmap_df.sort_values('sort_idx', ascending=False).drop(columns='sort_idx')
+
+    if sort_order == "By Risk Score":
+        heatmap_df = heatmap_df.sort_values('Disaster Risk Score', ascending=True)  # ascending=True puts highest at top
+    elif sort_order == "Selected Value/s" and selected_regions:
+        # Selected regions float to the top; rest stay in official order below
         selected_set = set(selected_regions)
-        pinned = [r for r in heatmap_df.index if r in selected_set]
-        rest = [r for r in heatmap_df.index if r not in selected_set]
-        if rest:  # only reorder when there are unselected rows to push below
-            heatmap_df = heatmap_df.loc[rest + pinned]
+        rest = heatmap_df[~heatmap_df.index.isin(selected_set)]
+        selected = heatmap_df[heatmap_df.index.isin(selected_set)]
+        heatmap_df = pd.concat([rest, selected])
 
     # Build multi-line hover strings for diagnostic detail in the heatmap
     hover_array = []
@@ -321,8 +327,12 @@ def build_risk_heatmap(risk_df: pd.DataFrame, selected_regions: List[str] = None
         )
         hover_array.append([hover] * len(heatmap_df.columns))
 
-    # Bold the specific region label if it is the only one selected in the navigator
-    y_labels = [f"<b>{r}</b>" if r == highlighted_region else r for r in heatmap_df.index]
+    # Bold label for all selected regions; plain text for the rest
+    selected_set = set(selected_regions) if selected_regions else set()
+    y_labels = [
+        f"<b>►&nbsp; {r}</b>" if r in selected_set else r
+        for r in heatmap_df.index
+    ]
     fig = go.Figure()
     fig.add_trace(go.Heatmap(
         z=heatmap_df.values,
@@ -351,6 +361,7 @@ def build_risk_heatmap(risk_df: pd.DataFrame, selected_regions: List[str] = None
         margin=dict(l=250, r=150, t=100, b=120),
         height=700
     )
+
     return fig
 
 
@@ -401,15 +412,14 @@ def main():
     st.markdown("---")
     st.subheader("🔥 Regional Vulnerability Matrix")
 
-    # Only bold a region in the heatmap if exactly ONE region is selected.
-    # Prevents NCR bolding on "Select All" default.
-    if len(selected_regions) == 1:
-        heatmap_ref = selected_regions[0]
-    else:
-        heatmap_ref = None
+    # Interactive sorting control for the heatmap
+    heatmap_sort_order = st.radio("Chart Sort Order:", ["Selected Value/s", "Official Regional Order", "By Risk Score"], horizontal=True, key="heatmap_sort")
+
+    # When all regions are selected, suppress highlights (nothing stands out if everything is selected)
+    heatmap_regions = None if len(selected_regions) == len(options_list) else selected_regions
 
     # Final Risk Matrix Visualization
-    st.plotly_chart(build_risk_heatmap(risk_df, selected_regions=selected_regions, highlighted_region=heatmap_ref), use_container_width=True)
+    st.plotly_chart(build_risk_heatmap(risk_df, sort_order=heatmap_sort_order, selected_regions=heatmap_regions), use_container_width=True)
 
 
 if __name__ == "__main__":
